@@ -1,5 +1,6 @@
 // ignore_for_file: depend_on_referenced_packages
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:get/get.dart';
 import 'package:chatview/chatview.dart';
@@ -14,7 +15,6 @@ import 'package:pocketbase_chat/app/services/storage_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:mime_type/mime_type.dart';
-import 'package:flutter_chat_types/flutter_chat_types.dart' as types;
 
 import 'dart:math' as Math;
 import 'package:image/image.dart' as Im;
@@ -109,22 +109,129 @@ class PocketbaseService extends GetxService {
     });
   }
 
-  /// Rooms
-  Future<List<ChatRoom>> getRooms() async {
+  Future<String> getProfilePhoto({required User user}) async {
     try {
-      ResultList result = await _client.collection('rooms').getList();
-      return result.items.map((e) => ChatRoom.fromJson(e.toJson())).toList();
+      final linkResponse = _client.files.getUrl(
+          RecordModel(
+              collectionId: user.collectionId.toString(),
+              collectionName: user.collectionName.toString(),
+              created: user.created.toString(),
+              data: {},
+              expand: {},
+              id: user.id.toString(),
+              updated: user.updated.toString()),
+          user.avatar.toString());
+
+      return linkResponse.origin + linkResponse.path;
     } on ClientException catch (e) {
       throw e.errorMessage;
     }
   }
 
-  Future<void> addRoom(String room, String userId) async {
+  Future<File> jpgTOpng(path) async {
+    File imagePath = File(path);
+    //get temporary directory
+    final tempDir = await getTemporaryDirectory();
+    int rand = Math.Random().nextInt(10000);
+    //reading jpg image
+    Im.Image? image = Im.decodeImage(imagePath.readAsBytesSync());
+    //decreasing the size of image- optional
+    Im.Image smallerImage = Im.copyResize(image!, width: 800);
+    //get converting and saving in file
+    File compressedImage = File('${tempDir.path}/img_$rand.png')
+      ..writeAsBytesSync(Im.encodePng(smallerImage, level: 8));
+
+    return compressedImage;
+  }
+
+  Future<String> changePhotoProfile(
+      {required String userID, required File file}) async {
     try {
-      await _client.collection('rooms').create(body: {
+      final img = await jpgTOpng(file.path);
+      file = img;
+      final message = MessageBuilder.parseMessageToMultipart(Message(
+          message: file.path.toString(),
+          createdAt: DateTime.now(),
+          sendBy: userID));
+      final response =
+          await _client.collection('users').update(userID, files: message);
+
+      final linkResponse =
+          _client.files.getUrl(response, response.data['avatar'].toString());
+
+      return 'linkResponse.origin + linkResponse.path';
+    } on ClientException catch (e) {
+      throw e.errorMessage;
+    }
+  }
+
+  /// Rooms
+  Future<List<ChatRoom>> getRoomsByUser({required idUser}) async {
+    try {
+      ResultList result = await _client
+          .collection('rooms_users')
+          .getList(filter: 'user = "$idUser" && room.type=1', expand: 'room');
+      return result.items
+          .map((e) => ChatRoom.fromJson(e.toJson()['expand']['room']))
+          .toList();
+    } on ClientException catch (e) {
+      throw e.errorMessage;
+    }
+  }
+
+  Future<void> addRoom(
+      {required String room,
+      required String userId,
+      int type = 1,
+      required List<dynamic> users}) async {
+    try {
+      final response = await _client.collection('rooms').create(body: {
         'name': room,
         "created_by": userId,
+        'type': type,
       });
+      users.forEach((element) {
+        _client.collection('rooms_users').create(body: {
+          'user': element,
+          "room": response.id,
+        });
+      });
+    } on ClientException catch (e) {
+      throw e.errorMessage;
+    }
+  }
+
+  Future<ChatRoom> addRoomThowUsers({
+    required String room,
+    required String userId,
+    required String toUserId,
+  }) async {
+    try {
+      String idOne = '${userId}_$toUserId';
+      String idThow = '${toUserId}_$userId';
+      final response = await _client.collection('rooms').getList(
+            filter: 'users_ids="$idOne" || users_ids="$idThow"',
+          );
+      if (response.items.isEmpty) {
+        final responseCreate = await _client.collection('rooms').create(body: {
+          'name': room,
+          "created_by": userId,
+          "users_ids": idOne,
+          "type": 2,
+        });
+        ChatRoom model = ChatRoom.fromJson(responseCreate.toJson());
+        List<dynamic> users = [userId, toUserId];
+        users.forEach((element) {
+          _client.collection('rooms_users').create(body: {
+            'user': element,
+            "room": model.id,
+          });
+        });
+        return model;
+      } else {
+        ChatRoom model = ChatRoom.fromJson(response.items.first.toJson());
+        return model;
+      }
     } on ClientException catch (e) {
       throw e.errorMessage;
     }
