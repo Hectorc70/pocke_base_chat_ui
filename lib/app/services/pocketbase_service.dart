@@ -310,6 +310,23 @@ class PocketbaseService extends GetxService {
     }
   }
 
+  Future<List<User>> getUserByName({required String textSearch}) async {
+    try {
+      print(textSearch);
+
+      final result = await _client
+          .collection('users')
+          .getList(filter: 'name ?~ "$textSearch"');
+      print(result.items.first.data);
+      List<User> users =
+          result.items.map((e) => User.fromJson(e.toJson())).toList();
+      return users;
+    } on ClientException catch (e) {
+      Get.log(e.toString());
+      throw e.errorMessage;
+    }
+  }
+
   /// Helpers
   Uri getFileUrl(RecordModel recordModel, String fileName) =>
       _client.getFileUrl(recordModel, fileName);
